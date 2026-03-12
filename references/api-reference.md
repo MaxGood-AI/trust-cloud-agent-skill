@@ -342,6 +342,14 @@ GET /policies/{id}
 
 Returns a single policy by ID.
 
+#### Export Policy
+
+```
+POST /policies/{id}/export
+```
+
+Downloads a policy document (PDF).
+
 ---
 
 ### Inventories
@@ -376,6 +384,23 @@ Returns a single inventory by ID.
 ---
 
 ## Common Patterns
+
+### Pagination
+
+List endpoints (`/controls`, `/tests`, `/systems`, `/policies`) support pagination via query parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (minimum: 1, default: 1) |
+| `limit` | integer | Items per page (maximum: 50, default: 10) |
+
+The response includes a `Link` header with `rel="next"` when more pages are available. **Important:** The default limit is 10, so callers must paginate to retrieve all results.
+
+Some endpoints (`/vendors`, `/inventories`) may return all results without pagination.
+
+### Known Limitations
+
+- **Policies endpoint**: The `GET /policies` endpoint may return an empty array even when policies exist in the TrustCloud web UI. This appears to be a TrustCloud API v1 limitation. Use the TrustCloud web dashboard for the authoritative policy list.
 
 ### Object IDs
 

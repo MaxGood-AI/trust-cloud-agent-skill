@@ -4,7 +4,7 @@ description: Interact with TrustCloud compliance platform via the TrustCloud API
 license: MIT
 compatibility: Requires python3 and environment variable TRUSTCLOUD_API_KEY
 metadata:
-  version: "1.0.0"
+  version: "2.0.0"
   openclaw:
     requires:
       env:
@@ -33,111 +33,200 @@ Direct: `https://app.trustcloud.ai` > Integrations > API Access
 All examples below assume a `.env` file with `TRUSTCLOUD_API_KEY` exists in the workspace root.
 
 ```bash
+# Full compliance posture overview (single call)
+python3 scripts/trustcloud_api.py dashboard
+
+# Same, but human-readable output
+python3 scripts/trustcloud_api.py --format text dashboard
+
+# Detailed evidence gap report
+python3 scripts/trustcloud_api.py --format text gap-analysis
+
+# Submit evidence via stdin (short, predictable command)
+echo '{"id":"<uuid>","type":"link","url":"https://...","description":"..."}' | python3 scripts/trustcloud_api.py submit-evidence --stdin
+
+# Execute a test via stdin
+echo '{"id":"<uuid>","answer":"yes","comment":"Verified"}' | python3 scripts/trustcloud_api.py execute-test --stdin
+
+# Batch submit evidence from a JSON file
+python3 scripts/trustcloud_api.py batch-submit --file evidence.json
+
+# Batch execute tests from a JSON file
+python3 scripts/trustcloud_api.py batch-execute --file executions.json
+
+# Verify evidence was submitted for specific tests
+python3 scripts/trustcloud_api.py --format text verify --ids "<uuid1>,<uuid2>"
+
 # Validate API key
 python3 scripts/trustcloud_api.py validate
+```
 
-# List all controls
-python3 scripts/trustcloud_api.py controls
+## Output Format
 
-# Get a specific control with its tests
-python3 scripts/trustcloud_api.py control --id <uuid> --include-tests
+All commands output JSON by default. Add `--format text` before the command for human-readable output:
 
-# List tests with missing evidence
-python3 scripts/trustcloud_api.py tests --evidence-status missing
-
-# List tests with evidence due within 30 days
-python3 scripts/trustcloud_api.py tests --due-by-days 30
-
-# Get a specific test
-python3 scripts/trustcloud_api.py test --id <uuid>
-
-# View test execution history
-python3 scripts/trustcloud_api.py test-history --id <uuid>
-
-# View evidence history
-python3 scripts/trustcloud_api.py evidence-history --id <uuid>
-
-# Submit link evidence
-python3 scripts/trustcloud_api.py submit-evidence --id <uuid> --type link \
-  --url "https://example.com/evidence" --description "Quarterly review" \
-  --evidence-date "2026/03/12"
-
-# Submit file evidence
-python3 scripts/trustcloud_api.py submit-evidence --id <uuid> --type file \
-  --file /path/to/evidence.pdf --description "Audit report"
-
-# Execute a self-assessment test (pass)
-python3 scripts/trustcloud_api.py execute-test --id <uuid> --answer yes \
-  --comment "Verified controls are in place"
-
-# List vendors
-python3 scripts/trustcloud_api.py vendors
-
-# Get a vendor with its systems
-python3 scripts/trustcloud_api.py vendor --id <uuid> --include-systems
-
-# List systems
-python3 scripts/trustcloud_api.py systems
-
-# Get tests for a system
-python3 scripts/trustcloud_api.py system-tests --id <uuid>
-
-# List policies
-python3 scripts/trustcloud_api.py policies
-
-# Get a specific policy
-python3 scripts/trustcloud_api.py policy --id <uuid>
-
-# List inventories
-python3 scripts/trustcloud_api.py inventories
-
-# Get a specific inventory
-python3 scripts/trustcloud_api.py inventory --id <uuid>
+```bash
+python3 scripts/trustcloud_api.py --format text dashboard
+python3 scripts/trustcloud_api.py --format text gap-analysis
+python3 scripts/trustcloud_api.py --format text tests --evidence-status missing
+python3 scripts/trustcloud_api.py --format text controls
+python3 scripts/trustcloud_api.py --format text policies
+python3 scripts/trustcloud_api.py --format text verify --ids "<uuid1>,<uuid2>"
 ```
 
 ## Core Workflows
 
-### Compliance Dashboard
-1. Run `controls` to list all controls and their states.
-2. Run `tests --evidence-status missing` to find tests needing evidence.
-3. Run `tests --due-by-days 30` to find tests with upcoming deadlines.
-4. Run `policies` to check policy approval statuses.
+### 1. Compliance Assessment (single command)
 
-### Evidence Gap Analysis
-1. Run `tests --evidence-status missing` to find all tests with missing evidence.
-2. Run `tests --evidence-status due` to find tests with evidence coming due.
-3. Run `tests --evidence-status outdated` to find tests with expired evidence.
-4. For each test, run `test --id <uuid>` to get details including the question and recommendation.
+Run `dashboard` to get a complete posture overview — control counts by state, evidence gaps (missing/due/outdated), and policy approval statuses — all in one call.
 
-### Evidence Submission
-1. Identify the test that needs evidence using `tests` with filters.
-2. Get test details with `test --id <uuid>` to understand what evidence is needed.
-3. Submit link evidence: `submit-evidence --id <uuid> --type link --url "..." --description "..."`
-4. Or submit file evidence: `submit-evidence --id <uuid> --type file --file /path/to/file --description "..."`
-5. Verify with `evidence-history --id <uuid>` to confirm submission.
+```bash
+python3 scripts/trustcloud_api.py --format text dashboard
+```
 
-### Test Execution
-1. Find available self-assessment tests: `tests --test-status available`
-2. Review the test question: `test --id <uuid>`
-3. Execute with pass/fail: `execute-test --id <uuid> --answer yes --comment "..."`
-4. Verify with `test-history --id <uuid>` to confirm execution.
+### 2. Evidence Gap Analysis (single command)
 
-### Vendor & System Review
-1. Run `vendors` to list all vendors.
-2. For each vendor of interest, run `vendor --id <uuid> --include-systems` to see associated systems.
-3. For each system, run `system-tests --id <uuid>` to review compliance tests.
+Run `gap-analysis` to get every test with missing, due, or outdated evidence — including test questions, recommendations, control mappings, and due dates.
 
-### Policy Status Review
-1. Run `policies` to list all policies and their approval statuses.
-2. For each policy, run `policy --id <uuid>` to get full details.
-3. Check `approvalStatus` and `policyState` fields to identify policies needing attention.
+```bash
+python3 scripts/trustcloud_api.py --format text gap-analysis
+```
+
+### 3. Evidence Submission
+
+**Single submission via stdin:**
+```bash
+echo '{"id":"<test-uuid>","type":"link","url":"https://...","description":"Quarterly review","evidenceDate":"2026/03/12"}' | python3 scripts/trustcloud_api.py submit-evidence --stdin
+```
+
+**File evidence via stdin:**
+```bash
+echo '{"id":"<test-uuid>","type":"file","file":"/path/to/report.pdf","description":"Audit report"}' | python3 scripts/trustcloud_api.py submit-evidence --stdin
+```
+
+**Batch submission from a JSON file:**
+```bash
+python3 scripts/trustcloud_api.py batch-submit --file evidence.json
+```
+
+The JSON file format:
+```json
+{
+  "submissions": [
+    {"id": "<test-uuid>", "type": "link", "url": "https://...", "description": "..."},
+    {"id": "<test-uuid>", "type": "file", "file": "/path/to/file.pdf", "description": "..."}
+  ]
+}
+```
+
+**Batch submission from stdin:**
+```bash
+echo '[{"id":"...","type":"link","url":"...","description":"..."}]' | python3 scripts/trustcloud_api.py batch-submit --stdin
+```
+
+### 4. Test Execution
+
+**Single test via stdin:**
+```bash
+echo '{"id":"<test-uuid>","answer":"yes","comment":"Controls verified in place"}' | python3 scripts/trustcloud_api.py execute-test --stdin
+```
+
+**Batch execution from a JSON file:**
+```bash
+python3 scripts/trustcloud_api.py batch-execute --file executions.json
+```
+
+The JSON file format:
+```json
+{
+  "executions": [
+    {"id": "<test-uuid>", "answer": "yes", "comment": "Verified"},
+    {"id": "<test-uuid>", "answer": "no", "comment": "Needs remediation"}
+  ]
+}
+```
+
+**Batch execution from stdin:**
+```bash
+echo '[{"id":"...","answer":"yes","comment":"..."}]' | python3 scripts/trustcloud_api.py batch-execute --stdin
+```
+
+### 5. Verification
+
+After submitting evidence or executing tests, verify everything was recorded:
+
+```bash
+python3 scripts/trustcloud_api.py --format text verify --ids "<uuid1>,<uuid2>,<uuid3>"
+```
+
+Or verify from a list on stdin:
+```bash
+echo '["<uuid1>","<uuid2>"]' | python3 scripts/trustcloud_api.py --format text verify --stdin
+```
+
+### 6. Complete Compliance Program Cycle
+
+A full compliance maintenance session follows this sequence:
+
+1. **Assess**: `dashboard` — understand current posture
+2. **Identify gaps**: `gap-analysis` — find all evidence gaps with details
+3. **Plan**: review gap-analysis output, determine what evidence to submit and which tests to execute
+4. **Submit evidence**: `batch-submit` or `submit-evidence --stdin` for each piece of evidence
+5. **Execute tests**: `batch-execute` or `execute-test --stdin` for self-assessment tests
+6. **Verify**: `verify --ids <submitted-test-ids>` — confirm everything was recorded
+7. **Re-assess**: `dashboard` — confirm posture improvement
+
+### 7. Vendor & System Review
+
+```bash
+python3 scripts/trustcloud_api.py vendors
+python3 scripts/trustcloud_api.py vendor --id <uuid> --include-systems
+python3 scripts/trustcloud_api.py system-tests --id <uuid>
+```
+
+### 8. Policy Status Review
+
+```bash
+python3 scripts/trustcloud_api.py --format text policies
+python3 scripts/trustcloud_api.py policy --id <uuid>
+```
+
+## Low-Level Commands
+
+These remain available for targeted lookups. Most workflows should use the composite commands above.
+
+```bash
+# List/filter tests
+python3 scripts/trustcloud_api.py tests --evidence-status missing
+python3 scripts/trustcloud_api.py tests --due-by-days 30
+python3 scripts/trustcloud_api.py tests --test-status available
+
+# Get single resources
+python3 scripts/trustcloud_api.py test --id <uuid>
+python3 scripts/trustcloud_api.py control --id <uuid> --include-tests
+python3 scripts/trustcloud_api.py test-history --id <uuid>
+python3 scripts/trustcloud_api.py evidence-history --id <uuid>
+
+# Submit evidence (flag-based, for simple cases)
+python3 scripts/trustcloud_api.py submit-evidence --id <uuid> --type link --url "https://..." --description "..."
+
+# Execute test (flag-based, for simple cases)
+python3 scripts/trustcloud_api.py execute-test --id <uuid> --answer yes --comment "..."
+```
 
 ## Script Reference
 
-All commands output JSON. Run `python3 scripts/trustcloud_api.py --help` for full usage.
+All commands output JSON by default. Add `--format text` for human-readable output where supported.
 
 | Command | Description |
 |---------|-------------|
+| **Composite commands** | |
+| `dashboard` | Full compliance posture overview (controls + evidence gaps + policies) |
+| `gap-analysis` | Detailed evidence gap report (missing + due + outdated tests with details) |
+| `verify` | Verify evidence/execution status for given test IDs |
+| `batch-submit` | Submit evidence to multiple tests from JSON file or stdin |
+| `batch-execute` | Execute multiple self-assessment tests from JSON file or stdin |
+| **Resource commands** | |
 | `validate` | Validate API key and show key details |
 | `controls` | List all controls |
 | `control` | Get a single control by ID (optionally include tests) |
@@ -145,8 +234,8 @@ All commands output JSON. Run `python3 scripts/trustcloud_api.py --help` for ful
 | `test` | Get a single test by ID |
 | `test-history` | Get test execution history |
 | `evidence-history` | Get evidence history for a test |
-| `submit-evidence` | Submit link or file evidence to a test |
-| `execute-test` | Execute (pass/fail) a self-assessment test |
+| `submit-evidence` | Submit link or file evidence to a test (flags or --stdin) |
+| `execute-test` | Execute (pass/fail) a self-assessment test (flags or --stdin) |
 | `vendors` | List all vendors |
 | `vendor` | Get a single vendor by ID (optionally include systems) |
 | `systems` | List all systems |

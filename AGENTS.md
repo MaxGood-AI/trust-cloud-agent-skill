@@ -4,6 +4,10 @@
 
 This repository contains a Claude Skill for interacting with TrustCloud compliance platform. It is a single-file Python CLI (`scripts/trustcloud_api.py`) using only the Python standard library.
 
+The CLI provides two levels of commands:
+- **Composite commands** (`dashboard`, `gap-analysis`, `verify`, `batch-submit`, `batch-execute`) — high-level operations that combine multiple API calls into a single invocation, designed for complete compliance program workflows.
+- **Resource commands** (`controls`, `tests`, `submit-evidence`, etc.) — low-level CRUD operations for individual resources.
+
 ## File Roles
 
 - **SKILL.md** -- Claude Skill definition file. This is what Claude Code reads when the skill is invoked. It describes available commands, workflows, and configuration. Keep it in sync with the actual CLI capabilities.
@@ -16,6 +20,8 @@ This repository contains a Claude Skill for interacting with TrustCloud complian
 2. Add a subparser for the command in `build_parser()`.
 3. Add the command name and handler to the `commands` dict in `main()`.
 4. Update `SKILL.md` to document the new command in both the Quick Start examples and the Script Reference table.
+5. If the command supports `--format text`, add a `fmt_<name>(data)` formatter function.
+6. For write operations, consider adding `--stdin` support to keep command lines short and predictable.
 
 ## Environment Setup
 
@@ -28,8 +34,10 @@ The script also sends `x-trustcloud-api-version: 1` with every request.
 
 - Python: PEP 8, 4-space indentation, `snake_case` functions and variables.
 - No third-party dependencies. stdlib only.
-- All CLI output must be valid JSON via `json.dump` to stdout.
+- Default output is JSON via `json.dump` to stdout. When `--format text` is specified, output human-readable text via `output_text()`.
 - Errors must exit with `error_exit()` which outputs JSON and sets exit code 1.
+- Write operations (`submit-evidence`, `execute-test`) support `--stdin` for JSON input to keep command lines short.
+- Composite commands (`dashboard`, `gap-analysis`, `verify`, `batch-submit`, `batch-execute`) combine multiple API calls into one invocation.
 
 ## Testing
 
