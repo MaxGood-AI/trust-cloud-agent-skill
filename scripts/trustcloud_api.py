@@ -239,11 +239,11 @@ def _ts_parse_trust_page_url():
     # Strip scheme
     if "://" in raw:
         raw = raw.split("://", 1)[1]
+    # Strip any trailing path (e.g. /home) before checking suffix
+    raw = raw.split("/")[0]
     # Strip .trustshare.com suffix if present
     if raw.endswith(".trustshare.com"):
         raw = raw[: -len(".trustshare.com")]
-    # Strip any trailing path
-    raw = raw.split("/")[0]
     return raw or None
 
 
