@@ -438,3 +438,144 @@ The API returns standard HTTP error codes. Common ones:
 | `available` | Test is available to execute |
 | `in_progress` | Test is currently in progress |
 | `excluded` | Test has been excluded |
+
+---
+
+## TrustShare Backend
+
+The TrustShare backend (`backend.trustcloud.ai`) serves TrustCloud's public trust pages. It provides read-only access to policies, frameworks, certifications, documents, controls, vendors, and search — data that is intended to be publicly visible on an organization's trust page.
+
+### Base URL
+
+```
+https://backend.trustcloud.ai
+```
+
+### Authentication
+
+TrustShare uses a two-step public authentication flow. The client credentials are embedded in the TrustShare SPA (they are not user secrets).
+
+**Step 1 — Public login:**
+
+```
+POST /auth/public/login
+```
+
+Headers:
+```
+Content-Type: application/json
+X-Kintent-Auth: Basic <base64(client_id:client_secret)>
+Origin: https://<subdomain>.trustshare.com
+```
+
+Body: `{}`
+
+Response:
+```json
+{
+  "token": "<jwt>",
+  "teamId": "<uuid>"
+}
+```
+
+**Step 2 — Authenticated requests:**
+
+All subsequent requests include:
+```
+X-Kintent-Auth: Bearer <token>
+Content-Type: application/json
+Origin: https://<subdomain>.trustshare.com
+```
+
+The `Origin` header must match the subdomain used during login.
+
+### Endpoints
+
+#### List Policies
+
+```
+GET /policies
+```
+
+Returns all policies. This endpoint works correctly (unlike the standard API's `GET /policies`).
+
+Response: Array of policy objects with fields including `id`, `title`, `approvalStatus`, `policyState`.
+
+#### Get Policy
+
+```
+GET /policies/{id}
+```
+
+Returns a single policy by ID.
+
+#### Get Policy Compliance Mappings
+
+```
+GET /policies/{id}/compliance-mappings
+```
+
+Returns compliance framework mappings for a policy (which frameworks/controls the policy satisfies).
+
+#### List Frameworks
+
+```
+GET /frameworks
+```
+
+Returns all compliance frameworks (e.g., SOC 2, GDPR, HIPAA, ISO 27001). Each framework has `id`, `name`, `shortName`.
+
+#### Get Framework Sections
+
+```
+GET /frameworks/{id}/sections
+```
+
+Returns sections within a framework, each containing controls with references.
+
+#### List Certifications
+
+```
+GET /teams/{teamId}/certifications
+```
+
+Returns certifications (e.g., SOC 2 reports). Each item contains a `certification` object with `name`, `shortName`, and download/view URLs.
+
+#### List Documents
+
+```
+GET /teams/{teamId}/documents
+```
+
+Returns shared compliance documents (e.g., privacy policies). Each document has `name`/`title`.
+
+#### List Controls (with Compliance Mappings)
+
+```
+GET /controls?includeComplianceMapping=true
+```
+
+Returns controls with full compliance framework mappings.
+
+#### List Vendors (Subprocessors)
+
+```
+GET /vendors
+```
+
+Returns subprocessor vendors with `name` and `purpose`.
+
+#### Search
+
+```
+POST /v2/search
+```
+
+Cross-cutting search across all compliance data.
+
+Body:
+```json
+{
+  "query": "search term"
+}
+```

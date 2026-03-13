@@ -4,7 +4,7 @@ description: Interact with TrustCloud compliance platform via the TrustCloud API
 license: MIT
 compatibility: Requires python3 and environment variable TRUSTCLOUD_API_KEY
 metadata:
-  version: "2.0.0"
+  version: "3.0.0"
   openclaw:
     requires:
       env:
@@ -17,7 +17,7 @@ metadata:
 
 # TrustCloud
 
-Manage compliance controls, evidence, tests, vendors, systems, policies, and inventories through the TrustCloud API (v1).
+Manage compliance controls, evidence, tests, vendors, systems, policies, and inventories through the TrustCloud API (v1). Optionally access policies, frameworks, certifications, and documents via the TrustShare backend.
 
 ## Environment Setup
 
@@ -27,6 +27,19 @@ The script **automatically loads** this from a `.env` file if it is not already 
 
 **Get your API key:** Go to the "Integrations" page in your TrustCloud program > "API Access" (requires Compliance Admin role) > "Begin Setup" > Generate Key.
 Direct: `https://app.trustcloud.ai` > Integrations > API Access
+
+### TrustShare Integration (Optional)
+
+Set `TRUSTCLOUD_TRUST_PAGE` to your TrustShare URL to enable `ts-*` commands that access policies, frameworks, certifications, and documents via the TrustShare backend. This is particularly valuable because the standard TrustCloud API `GET /policies` endpoint has a known bug that returns empty results.
+
+```bash
+# In .env
+TRUSTCLOUD_TRUST_PAGE=https://your-org.trustshare.com
+```
+
+When `TRUSTCLOUD_TRUST_PAGE` is set:
+- `ts-*` commands become available (policies, frameworks, certifications, documents, search)
+- The `dashboard` command automatically substitutes TrustShare policy data when the standard API returns empty
 
 ## Quick Start
 
@@ -59,6 +72,23 @@ python3 scripts/trustcloud_api.py --format text verify --ids "<uuid1>,<uuid2>"
 
 # Validate API key
 python3 scripts/trustcloud_api.py validate
+
+# --- TrustShare commands (require TRUSTCLOUD_TRUST_PAGE) ---
+
+# List all policies (works even when standard API returns empty)
+python3 scripts/trustcloud_api.py --format text ts-policies
+
+# Combined overview: policies + frameworks + certifications + documents
+python3 scripts/trustcloud_api.py --format text ts-overview
+
+# List compliance frameworks
+python3 scripts/trustcloud_api.py --format text ts-frameworks
+
+# Get policy detail with compliance mappings
+python3 scripts/trustcloud_api.py --format text ts-policy --id <uuid>
+
+# Search across all compliance data
+python3 scripts/trustcloud_api.py ts-search --query "encryption"
 ```
 
 ## Output Format
@@ -245,6 +275,17 @@ All commands output JSON by default. Add `--format text` for human-readable outp
 | `policy` | Get a single policy by ID |
 | `inventories` | List all inventories |
 | `inventory` | Get a single inventory by ID |
+| **TrustShare commands** (require `TRUSTCLOUD_TRUST_PAGE`) | |
+| `ts-policies` | List all policies via TrustShare (solves empty standard API) |
+| `ts-policy` | Get a policy with compliance mappings via TrustShare |
+| `ts-frameworks` | List all compliance frameworks (SOC 2, GDPR, HIPAA, etc.) |
+| `ts-framework` | Get framework sections with controls |
+| `ts-certifications` | List certifications (SOC 2 reports) |
+| `ts-documents` | List shared compliance documents |
+| `ts-subprocessors` | List subprocessors (vendors) |
+| `ts-controls` | List controls with compliance mappings |
+| `ts-search` | Search across all TrustShare compliance data |
+| `ts-overview` | Combined view: policies + frameworks + certs + docs |
 
 ## API Reference
 

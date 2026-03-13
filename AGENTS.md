@@ -28,7 +28,10 @@ The CLI provides two levels of commands:
 One environment variable is required:
 - `TRUSTCLOUD_API_KEY` -- Bearer token from TrustCloud (Integrations > API Access). Used directly as `Authorization: Bearer <key>`.
 
-The script also sends `x-trustcloud-api-version: 1` with every request.
+One environment variable is optional:
+- `TRUSTCLOUD_TRUST_PAGE` -- TrustShare URL (e.g. `https://my-org.trustshare.com`). Enables `ts-*` commands that access the TrustShare backend at `backend.trustcloud.ai`. The TrustShare backend uses public client credentials embedded in the TrustShare SPA (not user secrets) and authenticates via `X-Kintent-Auth` header with the `Origin` header set to the trust page URL.
+
+The script also sends `x-trustcloud-api-version: 1` with every request to the standard API.
 
 ## Code Style
 
@@ -64,3 +67,13 @@ python3 scripts/trustcloud_api.py tests --evidence-status missing
 - All object IDs are UUID v4 format.
 - The API is read-heavy with limited write operations (evidence submission and test execution only).
 - Self-assessment tests can be executed via API; automated tests are managed via TrustCloud integrations.
+
+### TrustShare Backend
+
+- Base URL: `https://backend.trustcloud.ai`
+- Auth: Public client credentials via `X-Kintent-Auth` header. Two-step flow:
+  1. `POST /auth/public/login` with `X-Kintent-Auth: Basic <base64(client_id:client_secret)>` and `Origin: https://<subdomain>.trustshare.com` — returns `{token, teamId}`
+  2. Subsequent requests use `X-Kintent-Auth: Bearer <token>` with same `Origin` header
+- The public client ID and secret are embedded in the TrustShare SPA JavaScript bundle (not user secrets).
+- The `GET /policies` endpoint on this backend returns full policy data, unlike the standard API which has a known bug returning empty.
+- TrustShare-specific endpoints: `/frameworks`, `/teams/{teamId}/certifications`, `/teams/{teamId}/documents`, `/v2/search`

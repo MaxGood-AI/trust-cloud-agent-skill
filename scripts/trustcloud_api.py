@@ -5,10 +5,12 @@ Self-contained client using only Python standard library.
 Output is JSON by default; use --format text for human-readable output.
 
 Environment variables (auto-loaded from .env if not in environment):
-    TRUSTCLOUD_API_KEY — Bearer token for TrustCloud API
+    TRUSTCLOUD_API_KEY      — Bearer token for TrustCloud API
+    TRUSTCLOUD_TRUST_PAGE   — (optional) TrustShare URL for ts-* commands
 """
 
 import argparse
+import base64
 import json
 import mimetypes
 import os
@@ -22,6 +24,10 @@ import uuid
 BASE_URL = "https://api.trustcloud.ai"
 API_VERSION = "1"
 
+TS_BACKEND_URL = "https://backend.trustcloud.ai"
+TS_CLIENT_ID = "4a9316ff-98f4-4b0d-a734-8a080a9b2b62"
+TS_CLIENT_SECRET_B64 = "b15rNXMrQThHVDdkfHYoXlpVYkFEZlRgaFY/Vn1veVYtcnlxTipsJH5xXyRjaDxwbC4qKyxIK25efSFYTTRD"  # noqa: E501
+
 _env_loaded = False
 
 
@@ -31,9 +37,6 @@ def _load_env_file():
     if _env_loaded:
         return
     _env_loaded = True
-
-    if os.environ.get("TRUSTCLOUD_API_KEY"):
-        return
 
     candidates = [
         os.path.join(os.getcwd(), ".env"),
@@ -217,6 +220,149 @@ def read_json_input(args):
     return None
 
 
+# -- TrustShare backend --------------------------------------------------------
+
+
+def _ts_parse_trust_page_url():
+    """Extract subdomain from TRUSTCLOUD_TRUST_PAGE URL.
+
+    Accepts formats like:
+        https://my-org.trustshare.com
+        https://my-org.trustshare.com/
+        my-org.trustshare.com
+        my-org  (bare subdomain)
+    """
+    _load_env_file()
+    raw = os.environ.get("TRUSTCLOUD_TRUST_PAGE", "").strip().rstrip("/")
+    if not raw:
+        return None
+    # Strip scheme
+    if "://" in raw:
+        raw = raw.split("://", 1)[1]
+    # Strip .trustshare.com suffix if present
+    if raw.endswith(".trustshare.com"):
+        raw = raw[: -len(".trustshare.com")]
+    # Strip any trailing path
+    raw = raw.split("/")[0]
+    return raw or None
+
+
+_ts_auth_cache = {}
+
+
+def _ts_authenticate(subdomain):
+    """Authenticate to the TrustShare backend using public client credentials.
+
+    Returns (token, team_id) on success, raises on failure.
+    """
+    if subdomain in _ts_auth_cache:
+        return _ts_auth_cache[subdomain]
+
+    client_secret = base64.b64decode(TS_CLIENT_SECRET_B64).decode()
+    basic_auth = "Basic " + base64.b64encode(
+        f"{TS_CLIENT_ID}:{client_secret}".encode()
+    ).decode()
+    origin = f"https://{subdomain}.trustshare.com"
+
+    req = urllib.request.Request(
+        f"{TS_BACKEND_URL}/auth/public/login",
+        data=b"{}",
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/json")
+    req.add_header("X-Kintent-Auth", basic_auth)
+    req.add_header("Origin", origin)
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            auth_data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+        except Exception:
+            pass
+        error_exit(
+            f"TrustShare auth failed (HTTP {e.code}): {body[:200]}"
+        )
+    except urllib.error.URLError as e:
+        error_exit(f"TrustShare auth failed: {e.reason}")
+
+    token = auth_data.get("token")
+    team_id = auth_data.get("teamId")
+    if not token:
+        error_exit("TrustShare auth response missing token")
+
+    _ts_auth_cache[subdomain] = (token, team_id)
+    return token, team_id
+
+
+def _ts_ensure_available():
+    """Guard: check TRUSTCLOUD_TRUST_PAGE is set, authenticate, return context.
+
+    Returns (subdomain, token, team_id) or calls error_exit.
+    """
+    subdomain = _ts_parse_trust_page_url()
+    if not subdomain:
+        error_exit(
+            "TRUSTCLOUD_TRUST_PAGE environment variable is not set. "
+            "Set it to your TrustShare URL (e.g. https://my-org.trustshare.com) "
+            "to use TrustShare commands."
+        )
+    token, team_id = _ts_authenticate(subdomain)
+    return subdomain, token, team_id
+
+
+def _ts_try_authenticate():
+    """Non-failing variant: returns (subdomain, token, team_id) or None."""
+    subdomain = _ts_parse_trust_page_url()
+    if not subdomain:
+        return None
+    try:
+        token, team_id = _ts_authenticate(subdomain)
+        return subdomain, token, team_id
+    except SystemExit:
+        return None
+
+
+def ts_api_request(method, path, subdomain, token, params=None, body=None):
+    """Make a request to the TrustShare backend."""
+    url = f"{TS_BACKEND_URL}{path}"
+    origin = f"https://{subdomain}.trustshare.com"
+
+    if params:
+        filtered = {k: v for k, v in params.items() if v is not None}
+        if filtered:
+            url += "?" + urllib.parse.urlencode(filtered)
+
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("X-Kintent-Auth", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    req.add_header("Origin", origin)
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode("utf-8")
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return {"error": True, "message": raw.strip() or "Empty response"}
+    except urllib.error.HTTPError as e:
+        body_text = ""
+        try:
+            body_text = e.read().decode("utf-8")
+        except Exception:
+            pass
+        return {"error": True, "status": e.code, "message": e.reason, "body": body_text}
+    except urllib.error.URLError as e:
+        return {"error": True, "message": str(e.reason)}
+
+
 # -- Text formatters -----------------------------------------------------------
 
 
@@ -240,7 +386,9 @@ def fmt_dashboard(data):
 
     p = data.get("policies", {})
     p_total = p.get("total", 0)
-    lines.append(f"POLICIES: {p_total} total")
+    p_source = p.get("source")
+    source_label = " (via TrustShare)" if p_source == "trustshare" else ""
+    lines.append(f"POLICIES: {p_total} total{source_label}")
     if p_total == 0:
         lines.append("  (API returned no policies — check TrustCloud web UI for authoritative count)")
     else:
@@ -394,6 +542,154 @@ def fmt_policies(data):
         pid = p.get("id", "?")
         lines.append(f"  [{status}] {title} (state: {state})")
         lines.append(f"           ID: {pid}")
+    return "\n".join(lines)
+
+
+# -- TrustShare text formatters ------------------------------------------------
+
+
+def fmt_ts_policies(data):
+    items = safe_list(data)
+    lines = [f"=== TrustShare Policies ({len(items)}) ===", ""]
+    for p in items:
+        title = p.get("title", "?")
+        status = p.get("approvalStatus", "?")
+        pid = p.get("id", "?")
+        lines.append(f"  [{status}] {title}")
+        lines.append(f"           ID: {pid}")
+    return "\n".join(lines)
+
+
+def fmt_ts_policy(data):
+    lines = ["=== TrustShare Policy Detail ===", ""]
+    policy = data.get("policy", {})
+    lines.append(f"  Title:    {policy.get('title', '?')}")
+    lines.append(f"  Status:   {policy.get('approvalStatus', '?')}")
+    lines.append(f"  ID:       {policy.get('id', '?')}")
+    lines.append("")
+
+    mappings = data.get("compliance_mappings", [])
+    if mappings:
+        lines.append(f"  Compliance Mappings ({len(mappings)}):")
+        for m in mappings:
+            fw = m.get("framework", m.get("frameworkShortName", "?"))
+            ref = m.get("reference", m.get("controlRef", ""))
+            name = m.get("name", m.get("controlName", ""))
+            label = f"{fw} {ref}" if ref else fw
+            if name:
+                label += f" — {name}"
+            lines.append(f"    {label}")
+    else:
+        lines.append("  No compliance mappings")
+    return "\n".join(lines)
+
+
+def fmt_ts_frameworks(data):
+    items = safe_list(data)
+    lines = [f"=== TrustShare Frameworks ({len(items)}) ===", ""]
+    for f_item in items:
+        name = f_item.get("name", "?")
+        short = f_item.get("shortName", "")
+        fid = f_item.get("id", "?")
+        short_str = f" ({short})" if short else ""
+        lines.append(f"  {name}{short_str}")
+        lines.append(f"           ID: {fid}")
+    return "\n".join(lines)
+
+
+def fmt_ts_framework(data):
+    lines = ["=== TrustShare Framework Sections ===", ""]
+    sections = safe_list(data)
+    for s in sections:
+        name = s.get("name", s.get("title", "?"))
+        ref = s.get("reference", "")
+        ref_str = f" [{ref}]" if ref else ""
+        lines.append(f"  {name}{ref_str}")
+        controls = s.get("controls", [])
+        for c in safe_list(controls):
+            c_name = c.get("name", c.get("controlName", "?"))
+            c_ref = c.get("reference", c.get("controlRef", ""))
+            c_ref_str = f" [{c_ref}]" if c_ref else ""
+            lines.append(f"    - {c_name}{c_ref_str}")
+    return "\n".join(lines)
+
+
+def fmt_ts_certifications(data):
+    items = safe_list(data)
+    lines = [f"=== TrustShare Certifications ({len(items)}) ===", ""]
+    for c in items:
+        cert = c.get("certification", c)
+        name = cert.get("name", "?")
+        short = cert.get("shortName", cert.get("type", ""))
+        short_str = f" ({short})" if short else ""
+        lines.append(f"  {name}{short_str}")
+    return "\n".join(lines)
+
+
+def fmt_ts_documents(data):
+    items = safe_list(data)
+    lines = [f"=== TrustShare Documents ({len(items)}) ===", ""]
+    for d in items:
+        name = d.get("displayName", d.get("name", d.get("title", "?")))
+        lines.append(f"  {name}")
+    return "\n".join(lines)
+
+
+def fmt_ts_subprocessors(data):
+    items = safe_list(data)
+    lines = [f"=== TrustShare Subprocessors ({len(items)}) ===", ""]
+    for v in items:
+        name = v.get("name", "?")
+        purpose = v.get("purpose", "")
+        purpose_str = f" — {purpose}" if purpose else ""
+        lines.append(f"  {name}{purpose_str}")
+    return "\n".join(lines)
+
+
+def fmt_ts_overview(data):
+    lines = ["=== TrustShare Overview ===", ""]
+
+    policies = data.get("policies", [])
+    lines.append(f"POLICIES ({len(policies)}):")
+    if not policies:
+        lines.append("  (none)")
+    for p in policies:
+        title = p.get("title", "?")
+        status = p.get("approvalStatus", "?")
+        lines.append(f"  [{status}] {title}")
+    lines.append("")
+
+    frameworks = data.get("frameworks", [])
+    lines.append(f"FRAMEWORKS ({len(frameworks)}):")
+    if not frameworks:
+        lines.append("  (none)")
+    for f_item in frameworks:
+        name = f_item.get("name", "?")
+        short = f_item.get("shortName", "")
+        short_str = f" ({short})" if short else ""
+        lines.append(f"  {name}{short_str}")
+    lines.append("")
+
+    certs = data.get("certifications", [])
+    lines.append(f"CERTIFICATIONS ({len(certs)}):")
+    if not certs:
+        lines.append("  (none)")
+    for c in certs:
+        cert = c.get("certification", c)
+        name = cert.get("name", "?")
+        short = cert.get("shortName", cert.get("type", ""))
+        short_str = f" ({short})" if short else ""
+        lines.append(f"  {name}{short_str}")
+    lines.append("")
+
+    docs = data.get("documents", [])
+    lines.append(f"DOCUMENTS ({len(docs)}):")
+    if not docs:
+        lines.append("  (none)")
+    for d in docs:
+        name = d.get("displayName", d.get("name", d.get("title", "?")))
+        lines.append(f"  {name}")
+
     return "\n".join(lines)
 
 
@@ -629,6 +925,19 @@ def cmd_dashboard(args):
     o_list = safe_list(tests_outdated)
     p_list = safe_list(policies)
 
+    # When standard API returns empty policies and TrustShare is configured,
+    # transparently substitute TrustShare policy data.
+    policy_source = None
+    if not p_list:
+        ts_ctx = _ts_try_authenticate()
+        if ts_ctx:
+            subdomain, token, team_id = ts_ctx
+            ts_policies = ts_api_request("GET", "/policies", subdomain, token)
+            ts_p_list = safe_list(ts_policies)
+            if ts_p_list:
+                p_list = ts_p_list
+                policy_source = "trustshare"
+
     data = {
         "controls": {
             "total": len(c_list),
@@ -645,6 +954,8 @@ def cmd_dashboard(args):
         },
         "tests_needing_attention": m_list + d_list + o_list,
     }
+    if policy_source:
+        data["policies"]["source"] = policy_source
 
     if args.format == "text":
         output_text(fmt_dashboard(data))
@@ -778,6 +1089,141 @@ def cmd_batch_execute(args):
     data = {"results": results}
     if args.format == "text":
         output_text(fmt_batch_results(data))
+    else:
+        output(data)
+
+
+# -- TrustShare command handlers ------------------------------------------------
+
+
+def cmd_ts_policies(args):
+    """List all policies via TrustShare backend."""
+    subdomain, token, team_id = _ts_ensure_available()
+    data = ts_api_request("GET", "/policies", subdomain, token)
+    if args.format == "text" and not is_error(data):
+        output_text(fmt_ts_policies(data))
+    else:
+        output(data)
+
+
+def cmd_ts_policy(args):
+    """Get a single policy with compliance mappings via TrustShare."""
+    subdomain, token, team_id = _ts_ensure_available()
+    policy = ts_api_request("GET", f"/policies/{args.id}", subdomain, token)
+    mappings = ts_api_request(
+        "GET", f"/policies/{args.id}/compliance-mappings", subdomain, token
+    )
+    data = {
+        "policy": policy if not is_error(policy) else {},
+        "compliance_mappings": safe_list(mappings),
+    }
+    if args.format == "text" and not is_error(policy):
+        output_text(fmt_ts_policy(data))
+    else:
+        output(data)
+
+
+def cmd_ts_frameworks(args):
+    """List all compliance frameworks via TrustShare."""
+    subdomain, token, team_id = _ts_ensure_available()
+    data = ts_api_request("GET", "/frameworks", subdomain, token)
+    if args.format == "text" and not is_error(data):
+        output_text(fmt_ts_frameworks(data))
+    else:
+        output(data)
+
+
+def cmd_ts_framework(args):
+    """Get framework sections via TrustShare."""
+    subdomain, token, team_id = _ts_ensure_available()
+    data = ts_api_request(
+        "GET", f"/frameworks/{args.id}/sections", subdomain, token
+    )
+    if args.format == "text" and not is_error(data):
+        output_text(fmt_ts_framework(data))
+    else:
+        output(data)
+
+
+def cmd_ts_certifications(args):
+    """List certifications via TrustShare."""
+    subdomain, token, team_id = _ts_ensure_available()
+    data = ts_api_request(
+        "GET", f"/teams/{team_id}/certifications", subdomain, token
+    )
+    if args.format == "text" and not is_error(data):
+        output_text(fmt_ts_certifications(data))
+    else:
+        output(data)
+
+
+def cmd_ts_documents(args):
+    """List shared documents via TrustShare."""
+    subdomain, token, team_id = _ts_ensure_available()
+    data = ts_api_request(
+        "GET", f"/teams/{team_id}/documents", subdomain, token
+    )
+    if args.format == "text" and not is_error(data):
+        output_text(fmt_ts_documents(data))
+    else:
+        output(data)
+
+
+def cmd_ts_subprocessors(args):
+    """List subprocessors (vendors) via TrustShare."""
+    subdomain, token, team_id = _ts_ensure_available()
+    data = ts_api_request("GET", "/vendors", subdomain, token)
+    if args.format == "text" and not is_error(data):
+        output_text(fmt_ts_subprocessors(data))
+    else:
+        output(data)
+
+
+def cmd_ts_controls(args):
+    """List controls with compliance mappings via TrustShare."""
+    subdomain, token, team_id = _ts_ensure_available()
+    data = ts_api_request(
+        "GET", "/controls", subdomain, token,
+        params={"includeComplianceMapping": "true"},
+    )
+    if args.format == "text" and not is_error(data):
+        output_text(fmt_controls(data))
+    else:
+        output(data)
+
+
+def cmd_ts_search(args):
+    """Search across all TrustShare compliance data."""
+    subdomain, token, team_id = _ts_ensure_available()
+    body = {"query": args.query}
+    data = ts_api_request(
+        "POST", "/v2/search", subdomain, token, body=body
+    )
+    output(data)
+
+
+def cmd_ts_overview(args):
+    """Combined TrustShare overview: policies, frameworks, certs, docs."""
+    subdomain, token, team_id = _ts_ensure_available()
+
+    policies = ts_api_request("GET", "/policies", subdomain, token)
+    frameworks = ts_api_request("GET", "/frameworks", subdomain, token)
+    certs = ts_api_request(
+        "GET", f"/teams/{team_id}/certifications", subdomain, token
+    )
+    docs = ts_api_request(
+        "GET", f"/teams/{team_id}/documents", subdomain, token
+    )
+
+    data = {
+        "policies": safe_list(policies),
+        "frameworks": safe_list(frameworks),
+        "certifications": safe_list(certs),
+        "documents": safe_list(docs),
+    }
+
+    if args.format == "text":
+        output_text(fmt_ts_overview(data))
     else:
         output(data)
 
@@ -917,6 +1363,41 @@ def build_parser():
     p = sub.add_parser("inventory", help="Get a single inventory by ID")
     p.add_argument("--id", required=True, help="Inventory ID (UUID)")
 
+    # -- TrustShare commands --
+
+    # ts-policies
+    sub.add_parser("ts-policies", help="List all policies via TrustShare")
+
+    # ts-policy
+    p = sub.add_parser("ts-policy", help="Get a policy with compliance mappings via TrustShare")
+    p.add_argument("--id", required=True, help="Policy ID (UUID)")
+
+    # ts-frameworks
+    sub.add_parser("ts-frameworks", help="List all compliance frameworks via TrustShare")
+
+    # ts-framework
+    p = sub.add_parser("ts-framework", help="Get framework sections via TrustShare")
+    p.add_argument("--id", required=True, help="Framework ID (UUID)")
+
+    # ts-certifications
+    sub.add_parser("ts-certifications", help="List certifications via TrustShare")
+
+    # ts-documents
+    sub.add_parser("ts-documents", help="List shared documents via TrustShare")
+
+    # ts-subprocessors
+    sub.add_parser("ts-subprocessors", help="List subprocessors via TrustShare")
+
+    # ts-controls
+    sub.add_parser("ts-controls", help="List controls with compliance mappings via TrustShare")
+
+    # ts-search
+    p = sub.add_parser("ts-search", help="Search across TrustShare compliance data")
+    p.add_argument("--query", required=True, help="Search query string")
+
+    # ts-overview
+    sub.add_parser("ts-overview", help="Combined TrustShare overview (policies + frameworks + certs + docs)")
+
     return parser
 
 
@@ -953,6 +1434,17 @@ def main():
         "verify": cmd_verify,
         "batch-submit": cmd_batch_submit,
         "batch-execute": cmd_batch_execute,
+        # TrustShare commands
+        "ts-policies": cmd_ts_policies,
+        "ts-policy": cmd_ts_policy,
+        "ts-frameworks": cmd_ts_frameworks,
+        "ts-framework": cmd_ts_framework,
+        "ts-certifications": cmd_ts_certifications,
+        "ts-documents": cmd_ts_documents,
+        "ts-subprocessors": cmd_ts_subprocessors,
+        "ts-controls": cmd_ts_controls,
+        "ts-search": cmd_ts_search,
+        "ts-overview": cmd_ts_overview,
     }
 
     handler = commands.get(args.command)
