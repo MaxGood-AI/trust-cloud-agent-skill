@@ -77,3 +77,7 @@ python3 scripts/trustcloud_api.py tests --evidence-status missing
 - The public client ID and secret are embedded in the TrustShare SPA JavaScript bundle (not user secrets).
 - The `GET /policies` endpoint on this backend returns full policy data, unlike the standard API which has a known bug returning empty.
 - TrustShare-specific endpoints: `/frameworks`, `/teams/{teamId}/certifications`, `/teams/{teamId}/documents`, `/v2/search`
+
+## Synchronization Rule
+
+If both `AGENTS.md` and `CLAUDE.md` exist in this directory, they must be identical in content and updated together in the same commit. Do not allow them to drift.
